@@ -6,10 +6,10 @@ mouth while holding one note.
 
 ## What it does
 
-- `formant_gui.py` — live app: spider-graph + sliders (pitch, wave cycle time,
-  brightness, bandwidth, volume) and vowel A/B/C selectors. Press Play and it
-  drones until Stop; every change affects the sound in real time. Save renders
-  the current settings to WAV.
+- `formant_gui.py` — live app: 3 independent drone layers (pitch / vowels /
+  volume each, all at once) plus a deep beat (BPM, pattern, kick pitch/decay/
+  volume, hats). Spider-graph + sliders, everything live in real time.
+  Press Play and it drones until Stop. Save renders the mix to WAV.
 - `make_formant.py` — renders one 30s example (`oo -> ah -> ee -> ah -> oo`,
   110 Hz drone) with NumPy only.
 - `make_formant_10.py` — renders 10 lower-pitched variations (55–82 Hz).
