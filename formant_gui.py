@@ -55,10 +55,11 @@ class LiveParams:
         self.bright = 1.0
         self.bw = 1.0
         self.master = 0.85
+        self.vowels = ["oo", "ah", "ee"]
         self.layers = [
-            {"pitch": 55.0, "vol": 0.8, "on": True, "path": ["oo", "ah", "ee"]},
-            {"pitch": 65.41, "vol": 0.6, "on": False, "path": ["oo", "oh", "ah"]},
-            {"pitch": 49.0, "vol": 0.6, "on": False, "path": ["ee", "ah", "oo"]},
+            {"pitch": 55.0, "vol": 0.8, "on": True},
+            {"pitch": 65.41, "vol": 0.6, "on": False},
+            {"pitch": 49.0, "vol": 0.6, "on": False},
         ]
         self.beat_on = False
         self.pattern = "Four"
@@ -75,7 +76,7 @@ class Drone:
         self.p = p
         self.stream = None
         self.harm = [np.zeros(N_HARM) for _ in range(3)]
-        self.mph = [0.0, 2.0, 4.0]
+        self.mph = 0.0
         self.prev_gains = None
         self.prev_master = 0.85
         self.prev_gscale = None
@@ -85,15 +86,15 @@ class Drone:
         with self.p.lock:
             import copy
             return (self.p.cycle, self.p.bright, self.p.bw, self.p.master,
-                    copy.deepcopy(self.p.layers),
+                    copy.deepcopy(self.p.layers), list(self.p.vowels),
                     self.p.beat_on, self.p.pattern, self.p.bpm,
                     self.p.kpitch, self.p.kdecay, self.p.kvol,
                     self.p.hatvol, self.p.beatvol)
 
-    def _drone_block(self, li, F0, cyc, roll, bw, vol, path, frames):
-        n = np.arange(frames, dtype=np.float64)
-        mph = self.mph[li] + np.cumsum(np.full(frames, 2 * np.pi / (cyc * SR)))
-        self.mph[li] = float(mph[-1] % (2 * np.pi * 1024))
+    def _formants(self, frames, cyc, path):
+        """Shared vowel shape: one morph phase, one path, all layers."""
+        mph = self.mph + np.cumsum(np.full(frames, 2 * np.pi / (cyc * SR)))
+        self.mph = float(mph[-1] % (2 * np.pi * 1024))
         m = 0.5 - 0.5 * np.cos(mph % (2 * np.pi))
         F = np.zeros((frames, 3))
         mask = m <= 0.5
@@ -103,6 +104,9 @@ class Drone:
         for i in range(3):
             F[mask, i] = (1 - k1[mask]) * path[0][i] + k1[mask] * path[1][i]
             F[~mask, i] = (1 - k1[~mask]) * path[1][i] + k1[~mask] * path[2][i]
+        return F
+
+    def _drone_block(self, li, F0, roll, bw, vol, F, frames):
         out = np.zeros(frames)
         for k in range(1, N_HARM + 1):
             ph = self.harm[li][k - 1] + np.cumsum(np.full(frames, 2 * np.pi * F0 * k / SR))
@@ -152,18 +156,19 @@ class Drone:
         return out * beatvol
 
     def callback(self, outdata, frames, time_info, status):
-        cyc, roll, bw, master, layers, bon, pat, bpm, kp, kd, kv, hv, bv = self._snap()
+        cyc, roll, bw, master, layers, vowels, bon, pat, bpm, kp, kd, kv, hv, bv = self._snap()
         f = np.linspace(0, 1, frames)
         if self.prev_gains is None:
             self.prev_gains = [L["vol"] if L["on"] else 0.0 for L in layers]
+        path = [VOWELS[p] for p in vowels]
+        F = self._formants(frames, cyc, path)
         mix = np.zeros(frames)
         cur_gains = []
         for li, L in enumerate(layers):
             g = L["vol"] if L["on"] else 0.0
             cur_gains.append(g)
             ga = self.prev_gains[li] + (g - self.prev_gains[li]) * f
-            path = [VOWELS[p] for p in L["path"]]
-            mix += self._drone_block(li, L["pitch"], cyc, roll, bw, 1.0, path, frames) * ga
+            mix += self._drone_block(li, L["pitch"], roll, bw, 1.0, F, frames) * ga
         self.prev_gains = cur_gains
         # share headroom: keep total drone level constant as layers join
         n_act = sum(1 for L in layers if L["on"] and L["vol"] > 0.0)
@@ -191,24 +196,24 @@ class Drone:
             self.stream = None
 
 
-def render_offline(layers, cyc, roll, bw, master, beat, dur):
+def render_offline(layers, vowels, cyc, roll, bw, master, beat, dur):
     N = int(SR * dur)
     t = np.arange(N, dtype=np.float64) / SR
     mix = np.zeros(N)
+    path = [VOWELS[p] for p in vowels]
+    m = 0.5 - 0.5 * np.cos(2 * np.pi * t / cyc)
+    F = np.zeros((N, 3))
+    mask = m <= 0.5
+    k1 = np.empty_like(m)
+    k1[mask] = m[mask] * 2.0
+    k1[~mask] = (m[~mask] - 0.5) * 2.0
+    for i in range(3):
+        F[mask, i] = (1 - k1[mask]) * path[0][i] + k1[mask] * path[1][i]
+        F[~mask, i] = (1 - k1[~mask]) * path[1][i] + k1[~mask] * path[2][i]
+    BW = BW_BASE * bw
     for L in layers:
         if not L["on"]:
             continue
-        path = [VOWELS[p] for p in L["path"]]
-        m = 0.5 - 0.5 * np.cos(2 * np.pi * t / cyc)
-        F = np.zeros((N, 3))
-        mask = m <= 0.5
-        k1 = np.empty_like(m)
-        k1[mask] = m[mask] * 2.0
-        k1[~mask] = (m[~mask] - 0.5) * 2.0
-        for i in range(3):
-            F[mask, i] = (1 - k1[mask]) * path[0][i] + k1[mask] * path[1][i]
-            F[~mask, i] = (1 - k1[~mask]) * path[1][i] + k1[~mask] * path[2][i]
-        BW = BW_BASE * bw
         y = np.zeros(N)
         for k in range(1, N_HARM + 1):
             fk = L["pitch"] * k
@@ -450,6 +455,7 @@ class App(tk.Tk):
     def _load_layer(self, i):
         with self.live.lock:
             L = dict(self.live.layers[i])
+            vw = list(self.live.vowels)
         self._syncing = True
         try:
             self.vars["pitch"][0].set(L["pitch"])
@@ -457,7 +463,7 @@ class App(tk.Tk):
             self.vars["pitch"][1].config(text=f"{L['pitch']:.2f}")
             self.vars["layervol"][1].config(text=f"{L['vol']:.2f}")
             self.layer_on.set(L["on"])
-            for var, name in ((self.v1, L["path"][0]), (self.v2, L["path"][1]), (self.v3, L["path"][2])):
+            for var, name in ((self.v1, vw[0]), (self.v2, vw[1]), (self.v3, vw[2])):
                 var.set(name)
         finally:
             self._syncing = False
@@ -488,9 +494,8 @@ class App(tk.Tk):
     def _on_vowel(self):
         if self._syncing:
             return
-        i = self.sel_layer.get()
         with self.live.lock:
-            self.live.layers[i]["path"] = [self.v1.get(), self.v2.get(), self.v3.get()]
+            self.live.vowels = [self.v1.get(), self.v2.get(), self.v3.get()]
         self._push_to_live()
 
     def _get01(self, key):
@@ -551,6 +556,7 @@ class App(tk.Tk):
         with self.live.lock:
             import copy
             layers = copy.deepcopy(self.live.layers)
+            vowels = list(self.live.vowels)
             cyc = self.live.cycle
             roll = self.live.bright
             bw = self.live.bw
@@ -563,7 +569,7 @@ class App(tk.Tk):
         self.status.config(text="rendering...")
         def work():
             try:
-                pcm = render_offline(layers, cyc, roll, bw, master, beat, dur)
+                pcm = render_offline(layers, vowels, cyc, roll, bw, master, beat, dur)
                 with wave.open(p, "wb") as wf:
                     wf.setnchannels(1)
                     wf.setsampwidth(2)
