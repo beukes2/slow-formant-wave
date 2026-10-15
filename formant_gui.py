@@ -57,8 +57,8 @@ class LiveParams:
         self.master = 0.85
         self.layers = [
             {"pitch": 55.0, "vol": 0.8, "on": True, "path": ["oo", "ah", "ee"]},
-            {"pitch": 65.41, "vol": 0.0, "on": False, "path": ["oo", "oh", "ah"]},
-            {"pitch": 49.0, "vol": 0.0, "on": False, "path": ["ee", "ah", "oo"]},
+            {"pitch": 65.41, "vol": 0.6, "on": False, "path": ["oo", "oh", "ah"]},
+            {"pitch": 49.0, "vol": 0.6, "on": False, "path": ["ee", "ah", "oo"]},
         ]
         self.beat_on = False
         self.pattern = "Four"
@@ -460,8 +460,21 @@ class App(tk.Tk):
 
     def _on_layer_toggle(self):
         i = self.sel_layer.get()
+        on = self.layer_on.get()
         with self.live.lock:
-            self.live.layers[i]["on"] = self.layer_on.get()
+            self.live.layers[i]["on"] = on
+            if on and self.live.layers[i]["vol"] < 0.05:
+                self.live.layers[i]["vol"] = 0.7
+        if on:
+            self._syncing = True
+            try:
+                with self.live.lock:
+                    v = self.live.layers[i]["vol"]
+                self.vars["layervol"][0].set(v)
+                self.vars["layervol"][1].config(text=f"{v:.2f}")
+            finally:
+                self._syncing = False
+            self.radar.refresh()
         self._push_to_live()
 
     def _on_vowel(self):
