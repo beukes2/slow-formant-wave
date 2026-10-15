@@ -78,6 +78,7 @@ class Drone:
         self.mph = [0.0, 2.0, 4.0]
         self.prev_gains = None
         self.prev_master = 0.85
+        self.prev_gscale = None
         self.beat_phase = 0.0  # in beats
 
     def _snap(self):
@@ -164,6 +165,13 @@ class Drone:
             path = [VOWELS[p] for p in L["path"]]
             mix += self._drone_block(li, L["pitch"], cyc, roll, bw, 1.0, path, frames) * ga
         self.prev_gains = cur_gains
+        # share headroom: keep total drone level constant as layers join
+        n_act = sum(1 for L in layers if L["on"] and L["vol"] > 0.0)
+        gscale = 1.0 / math.sqrt(max(n_act, 1))
+        if self.prev_gscale is None:
+            self.prev_gscale = gscale
+        mix *= self.prev_gscale + (gscale - self.prev_gscale) * f
+        self.prev_gscale = gscale
         mix += self._beat_block(frames, bon, pat, bpm, kp, kd, kv, hv, bv)
         ma = self.prev_master + (master - self.prev_master) * f
         self.prev_master = master
